@@ -8,6 +8,8 @@ def fix_generator(state):
     code = state["code"]
     context = state["context"]
     errors = state["errors"]
+    language = state.get("language", "Python")   # use detected language
+    query = state.get("query", "")               # user's optional question/instruction 
 
     # STEP 1: Check memory first (only for short, clean error strings)
     memory_fix = None
@@ -29,18 +31,21 @@ def fix_generator(state):
     else:
         errors_text = str(errors)
 
+    query_section = f"\n\nUser's specific instruction: {query}" if query.strip() else ""
+
     messages = [
         SystemMessage(content=(
-            "You are an expert software engineer. "
+            f"You are an expert {language} software engineer. "
             "Fix the given code so it is correct and handles all listed errors. "
-            "Output ONLY the raw fixed Python code — no markdown fences, no explanation, no comments about what changed."
+            f"Output ONLY the raw fixed {language} code — no markdown fences, no explanation, no comments about what changed."
         )),
         HumanMessage(content=(
             f"Fix ALL of the following errors in the code:\n\n"
             f"Errors to fix:\n{errors_text}\n\n"
             f"Relevant context:\n{context}\n\n"
             f"Original code:\n{code}\n\n"
-            f"Return ONLY the corrected code, nothing else."
+            f"{query_section}"
+            f"Return ONLY the corrected {language} code, nothing else."
         ))
     ]
 
@@ -50,7 +55,7 @@ def fix_generator(state):
     # Strip any accidental markdown code fences
     if "```" in fixed_code:
         lines = fixed_code.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
+        lines = [line for line in lines if not line.strip().startswith("```")]
         fixed_code = "\n".join(lines)
 
     return {**state, "fixed_code": fixed_code.strip()}

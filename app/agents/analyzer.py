@@ -6,6 +6,9 @@ llm = get_llm()
 
 def analyzer(state):
     code = state["code"]
+    query = state.get("query", "")   # user's optional instruction
+
+    query_hint = f"\n\nUser's specific concern: {query}" if query.strip() else ""
 
     messages = [
         SystemMessage(content=(
@@ -17,6 +20,7 @@ def analyzer(state):
             f"Analyze this code. Identify the programming language and write a one-sentence description.\n\n"
             f'Respond ONLY with JSON: {{"language": "...", "description": "..."}}\n\n'
             f"Code:\n{code}"
+            f"{query_hint}"
         ))
     ]
 
@@ -31,7 +35,7 @@ def analyzer(state):
         }
 
     return {
-        **state,
+        **state,  # code
         "language": data.get("language", "unknown"),
         "description": data.get("description", "")
     }

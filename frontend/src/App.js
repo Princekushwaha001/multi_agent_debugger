@@ -19,6 +19,17 @@ function sessionTitle(code) {
   return firstLine.length > 38 ? firstLine.slice(0, 38) + "…" : firstLine;
 }
 
+// Map detected language name → file extension
+function langToExt(lang = "") {
+  const map = {
+    python: "py", javascript: "js", typescript: "ts", java: "java",
+    "c++": "cpp", cpp: "cpp", c: "c", "c#": "cs", csharp: "cs",
+    go: "go", rust: "rs", ruby: "rb", php: "php", swift: "swift",
+    kotlin: "kt", scala: "scala", html: "html", css: "css", sql: "sql",
+  };
+  return map[lang.toLowerCase()] || "txt";
+}
+
 const STORAGE_KEY = "ai_debugger_sessions";
 
 function loadSessions() {
@@ -58,6 +69,7 @@ function CodeBlock({ code, label = "python" }) {
 /* ── AI Result Cards ── */
 function ResultCards({ result }) {
   const ok = result?.status === "success";
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
 
@@ -78,8 +90,16 @@ function ResultCards({ result }) {
           <div className="result-card-header"><span>🔍</span> Analysis</div>
           <div className="result-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <div className="info-row">
-              <div><div className="info-label">Language</div><div className="info-value"><span className="lang-pill">{result.language || "—"}</span></div></div>
-              <div><div className="info-label">Description</div><div className="info-value">{result.description || "—"}</div></div>
+              <div>
+                <div className="info-label">Language</div>
+                <div className="info-value">
+                  <span className="lang-pill">{result.language || "—"}</span>
+                </div>
+              </div>
+              <div>
+                <div className="info-label">Description</div>
+                <div className="info-value">{result.description || "—"}</div>
+              </div>
             </div>
           </div>
         </div>
@@ -89,7 +109,11 @@ function ResultCards({ result }) {
       <div className="result-card card-errors fade-in">
         <div className="result-card-header">
           <span>⚠️</span> Errors Detected
-          {result.errors?.length > 0 && <span style={{ marginLeft: "auto", fontWeight: 700 }}>{result.errors.length}</span>}
+          {result.errors?.length > 0 && (
+            <span style={{ marginLeft: "auto", fontWeight: 700 }}>
+              {result.errors.length}
+            </span>
+          )}
         </div>
         <div className="result-card-body">
           {result.errors?.length > 0 ? (
@@ -111,7 +135,19 @@ function ResultCards({ result }) {
       {result.fixed_code && (
         <div className="result-card card-fix fade-in">
           <div className="result-card-header"><span>🔧</span> Fixed Code</div>
-          <div className="result-card-body"><CodeBlock code={result.fixed_code} /></div>
+          <div className="result-card-body">
+            <CodeBlock code={result.fixed_code} />
+          </div>
+        </div>
+      )}
+
+      {/* 🔥 NEW: Documented Code */}
+      {result.documented_code && (
+        <div className="result-card card-doc fade-in">
+          <div className="result-card-header"><span>📚</span> Documented Code</div>
+          <div className="result-card-body">
+            <CodeBlock code={result.documented_code} />
+          </div>
         </div>
       )}
 
@@ -120,15 +156,22 @@ function ResultCards({ result }) {
         <div className="result-card card-exec fade-in">
           <div className="result-card-header"><span>▶</span> Execution Result</div>
           <div className="result-card-body">
-            <div className={`exec-result ${ok ? "ok" : ""}`}>{result.execution_result}</div>
+            <div className={`exec-result ${ok ? "ok" : ""}`}>
+              {result.execution_result}
+            </div>
           </div>
         </div>
       )}
 
-      {/* Tests */}
+      {/* 🔥 IMPROVED TESTS SECTION */}
       {result.tests?.length > 0 && (
         <div className="result-card card-tests fade-in">
-          <div className="result-card-header"><span>🧪</span> Generated Tests</div>
+          <div className="result-card-header">
+            <span>🧪</span> Test Scenarios
+            <span style={{ marginLeft: "auto", fontWeight: 700 }}>
+              {result.tests.length}
+            </span>
+          </div>
           <div className="result-card-body">
             <div className="tests-list">
               {result.tests.map((t, i) => (
@@ -141,6 +184,7 @@ function ResultCards({ result }) {
           </div>
         </div>
       )}
+
     </div>
   );
 }
@@ -151,8 +195,9 @@ function ResultCards({ result }) {
 export default function App() {
   const [sessions, setSessions]       = useState(loadSessions);
   const [activeId, setActiveId]       = useState(null);
-  const [code, setCode]               = useState("");
+  const [code, setCode]               = useState("");   // user's full input
   const [loading, setLoading]         = useState(false);
+  const [search, setSearch]           = useState("");   // sidebar search filter
 
   const chatEndRef  = useRef(null);
   const textareaRef = useRef(null);
@@ -184,8 +229,8 @@ export default function App() {
   const handleSubmit = useCallback(async () => {
     if (!code.trim() || loading) return;
 
-    const userMsg = { type: "user", code: code.trim(), ts: new Date().toISOString() };
     const currentCode = code.trim();
+    const userMsg = { type: "user", code: currentCode, ts: new Date().toISOString() };
     setCode("");
 
     let targetId = activeId;
@@ -216,7 +261,8 @@ export default function App() {
       const res  = await fetch("http://127.0.0.1:8000/debug", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: currentCode }),
+        // Send the input as BOTH code and query so the backend gets the natural language intent
+        body: JSON.stringify({ code: currentCode, query: currentCode }),
       });
       const data = await res.json();
 
@@ -252,8 +298,11 @@ export default function App() {
     }
   };
 
-  const recentSessions = sessions.slice(0, 3);
-  const olderSessions  = sessions.slice(3);
+  const filteredSessions = search.trim()
+    ? sessions.filter((s) => s.title.toLowerCase().includes(search.toLowerCase()))
+    : sessions;
+  const recentSessions = filteredSessions.slice(0, 3);
+  const olderSessions  = filteredSessions.slice(3);
 
   return (
     <div className="app-shell">
@@ -264,10 +313,12 @@ export default function App() {
             <span className="btn-icon">✏️</span>
             New Debug Session
           </button>
-          <button className="sidebar-btn">
-            <span className="btn-icon">🔍</span>
-            Search sessions
-          </button>
+          <input
+            className="sidebar-search"
+            placeholder="🔍  Search sessions…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
         </div>
 
         <div className="sidebar-divider" />
@@ -371,7 +422,7 @@ export default function App() {
                     </div>
                     <div className="user-code-bubble">
                       <div className="user-code-bubble-header">
-                        <span>code.py</span>
+                        <span>code.{langToExt(msg.lang || "")}</span>
                         <CopyButton text={msg.code} />
                       </div>
                       <pre>{msg.code}</pre>
@@ -418,16 +469,19 @@ export default function App() {
         {/* ── Bottom Input Bar ── */}
         <div className="input-bar-wrap">
           <div className="input-bar">
-            <textarea
-              ref={textareaRef}
-              className="input-textarea"
-              placeholder="Paste your code here… (Ctrl+Enter to send)"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              onKeyDown={handleKeyDown}
-              rows={1}
-              spellCheck={false}
-            />
+            <div className="input-bar-body">
+              <textarea
+                ref={textareaRef}
+                className="input-textarea"
+                placeholder="Ask a question or paste your code here… (Ctrl+Enter to send)"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                onKeyDown={handleKeyDown}
+                rows={1}
+                spellCheck={false}
+              />
+            </div>
+            {/* ── send button stays on the right ── */}
             <div className="input-actions-row">
               <button
                 className="send-btn"
