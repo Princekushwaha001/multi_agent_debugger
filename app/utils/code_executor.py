@@ -1,16 +1,28 @@
 import subprocess
-import sys
 import os
-
+import sys
 
 def clean_code(code: str) -> str:
     """
-    Remove markdown formatting like ```python ... ```
+    Remove markdown formatting like ```python ... ``` and common AI headers
     """
-    if "```" in code:
-        code = code.replace("```python", "")
-        code = code.replace("```", "")
-    return code.strip()
+    import re
+    # Strip full markdown code blocks
+    code = re.sub(r'```python\n?', '', code)
+    code = re.sub(r'```\n?', '', code)
+    
+    # Strip common human-readable headers AI sometimes adds at the very top
+    # like "### Fixed Code" or "Python:"
+    lines = code.split('\n')
+    filtered_lines = []
+    for line in lines:
+        cleaned_line = line.strip()
+        # Skip lines that look like markdown headers but aren't comments
+        if cleaned_line.startswith('###') or (cleaned_line.lower().startswith('python') and cleaned_line.endswith(':')):
+            continue
+        filtered_lines.append(line)
+        
+    return '\n'.join(filtered_lines).strip()
 
 
 def run_code(code: str, timeout: int = 10) -> str:
