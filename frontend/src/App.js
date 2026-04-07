@@ -114,18 +114,38 @@ function ResultCards({ result }) {
           )}
         </div>
         <div className="result-card-body">
-          {result.errors?.length > 0 ? (
-            <div className="error-list">
-              {result.errors.map((e, i) => (
-                <div key={i} className="error-item">
-                  <div className="error-num">{i + 1}</div>
-                  <span>{e}</span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="no-errors">✅ No errors detected</div>
-          )}
+          {(() => {
+            // Normalize errors - handle the edge case where backend sends a big JSON string
+            let errors = result.errors || [];
+            if (errors.length === 1 && typeof errors[0] === 'string' && errors[0].startsWith('{')) {
+              try {
+                const parsed = JSON.parse(errors[0]);
+                if (parsed.errors && Array.isArray(parsed.errors)) {
+                  // Deduplicate on the UI side too
+                  const seen = new Set();
+                  errors = parsed.errors.filter(e => {
+                    const key = e.trim().toLowerCase();
+                    if (seen.has(key)) return false;
+                    seen.add(key);
+                    return true;
+                  }).slice(0, 10);
+                }
+              } catch {}
+            }
+
+            return errors.length > 0 ? (
+              <div className="error-list">
+                {errors.map((e, i) => (
+                  <div key={i} className="error-item">
+                    <div className="error-num">{i + 1}</div>
+                    <span>{e}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="no-errors">✅ No errors detected</div>
+            );
+          })()}
         </div>
       </div>
 
