@@ -1,22 +1,18 @@
 from app.utils.code_executor import run_code
-from app.memory.memory_store import add_memory
 
 def validator(state):
-    fixed_code = state["fixed_code"]
-    errors = state["errors"]
+    fixed_code = state.get("fixed_code", "")
+    errors = state.get("errors", [])
     tests = state.get("tests", [])
+    confidence = state.get("confidence", 0.5)
 
     # Run code
     execution_result = run_code(fixed_code)
-    success = "Successful" in execution_result
+    success = execution_result.startswith("Execution Successful")
 
-    # Save memory if success
-    if success:
-        if isinstance(errors, list):
-            for err in errors:
-                add_memory(err, fixed_code)
-        else:
-            add_memory(errors, fixed_code)
+    # 🔥 NEW: confidence check
+    if confidence < 0.5:
+        success = False
 
     return {
         **state,

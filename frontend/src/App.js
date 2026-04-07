@@ -1,21 +1,19 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { supabase } from './supabase';
 import "./index.css";
 
 /* ── helpers ── */
-function genId() {
-  return Math.random().toString(36).slice(2, 10);
-}
 
 function timeAgo(iso) {
   const diff = (Date.now() - new Date(iso)) / 1000;
-  if (diff < 60)    return "just now";
-  if (diff < 3600)  return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
-function sessionTitle(code) {
-  const firstLine = code.trim().split("\n")[0].trim();
+function sessionTitle(text) {
+  const firstLine = text.trim().split("\n")[0].trim();
   return firstLine.length > 38 ? firstLine.slice(0, 38) + "…" : firstLine;
 }
 
@@ -30,14 +28,14 @@ function langToExt(lang = "") {
   return map[lang.toLowerCase()] || "txt";
 }
 
-const STORAGE_KEY = "ai_debugger_sessions";
+const API_URL = process.env.REACT_APP_API_URL || "http://127.0.0.1:8000";
 
-function loadSessions() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
-  catch { return []; }
-}
-function saveSessions(s) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+// UUID Generator since Postgres requires proper UUID format
+function genId() {
+  if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+  return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c =>
+    (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+  );
 }
 
 /* ── CopyButton ── */
@@ -131,22 +129,12 @@ function ResultCards({ result }) {
         </div>
       </div>
 
-      {/* Fixed Code */}
-      {result.fixed_code && (
+      {/* Fixed Code (Includes Docstrings) */}
+      {(result.documented_code || result.fixed_code) && (
         <div className="result-card card-fix fade-in">
           <div className="result-card-header"><span>🔧</span> Fixed Code</div>
           <div className="result-card-body">
-            <CodeBlock code={result.fixed_code} />
-          </div>
-        </div>
-      )}
-
-      {/* 🔥 NEW: Documented Code */}
-      {result.documented_code && (
-        <div className="result-card card-doc fade-in">
-          <div className="result-card-header"><span>📚</span> Documented Code</div>
-          <div className="result-card-body">
-            <CodeBlock code={result.documented_code} />
+            <CodeBlock code={result.documented_code || result.fixed_code} label={result.language || "code"} />
           </div>
         </div>
       )}
@@ -163,27 +151,7 @@ function ResultCards({ result }) {
         </div>
       )}
 
-      {/* 🔥 IMPROVED TESTS SECTION */}
-      {result.tests?.length > 0 && (
-        <div className="result-card card-tests fade-in">
-          <div className="result-card-header">
-            <span>🧪</span> Test Scenarios
-            <span style={{ marginLeft: "auto", fontWeight: 700 }}>
-              {result.tests.length}
-            </span>
-          </div>
-          <div className="result-card-body">
-            <div className="tests-list">
-              {result.tests.map((t, i) => (
-                <div key={i} className="test-item">
-                  <div className="test-num">{i + 1}</div>
-                  <span>{t}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
+
 
     </div>
   );
@@ -193,21 +161,44 @@ function ResultCards({ result }) {
    MAIN APP
 ══════════════════════════════════════════════════ */
 export default function App() {
-  const [sessions, setSessions]       = useState(loadSessions);
+  const [session, setSession]         = useState(null);
+  const [sessions, setSessions]       = useState([]);
   const [activeId, setActiveId]       = useState(null);
-  const [code, setCode]               = useState("");   // user's full input
+  const [input, setInput]             = useState("");   
   const [loading, setLoading]         = useState(false);
-  const [search, setSearch]           = useState("");   // sidebar search filter
+  const [search, setSearch]           = useState("");
 
   const chatEndRef  = useRef(null);
   const textareaRef = useRef(null);
 
-  const activeSession = sessions.find((s) => s.id === activeId) || null;
+  /* Load sessions from Postgres DB securely */
+  const fetchDBSessions = async (user_id) => {
+    const { data, error } = await supabase.from('sessions').select('*').eq('user_id', user_id).order('created_at', { ascending: false });
+    if (data) setSessions(data);
+  };
+
+  /* auth listener */
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session) fetchDBSessions(session.user.id);
+    })
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (session) fetchDBSessions(session.user.id);
+      else setSessions([]);
+    })
+
+    return () => subscription.unsubscribe()
+  }, [])
 
   /* auto-scroll to bottom */
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [activeSession?.messages?.length, loading]);
+  }, [sessions, loading]);
 
   /* auto-resize textarea */
   useEffect(() => {
@@ -215,80 +206,75 @@ export default function App() {
     if (!el) return;
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 280) + "px";
-  }, [code]);
+  }, [input]);
 
-  /* persist sessions */
-  useEffect(() => {
-    saveSessions(sessions);
-  }, [sessions]);
 
-  const newSession = () => { setActiveId(null); setCode(""); };
 
-  const openSession = (id) => { setActiveId(id); setCode(""); };
+  const activeSession = sessions.find((s) => s.id === activeId) || null;
+  const newSession = () => { setActiveId(null); setInput(""); };
+  const openSession = (id) => { setActiveId(id); setInput(""); };
 
   const handleSubmit = useCallback(async () => {
-    if (!code.trim() || loading) return;
+    if (!input.trim() || loading || !session) return;
 
-    const currentCode = code.trim();
-    const userMsg = { type: "user", code: currentCode, ts: new Date().toISOString() };
-    setCode("");
+    const currentInput = input.trim();
+    const userMsg = { type: "user", text: currentInput, ts: new Date().toISOString() };
+    setInput("");
 
     let targetId = activeId;
+    let updatedMessages = [];
 
-    // If no active session, create one
-    setSessions((prev) => {
-      if (!activeId) {
-        const newS = {
-          id: genId(),
-          title: sessionTitle(currentCode),
-          ts: new Date().toISOString(),
-          messages: [userMsg],
-        };
-        targetId = newS.id;
-        setActiveId(newS.id);
-        return [newS, ...prev];
+    // Local DB optimisic update & Postgres sync
+    if (!activeId) {
+      targetId = genId();
+      setActiveId(targetId);
+      const newS = {
+        id: targetId,
+        user_id: session.user.id,
+        title: sessionTitle(currentInput),
+        messages: [userMsg]
+      };
+      setSessions((prev) => [newS, ...prev]);
+      updatedMessages = [userMsg];
+      await supabase.from('sessions').insert([newS]);
+    } else {
+      const existing = sessions.find((s) => s.id === activeId);
+      if (existing) {
+        updatedMessages = [...existing.messages, userMsg];
+        setSessions((prev) => prev.map((s) => s.id === activeId ? { ...s, messages: updatedMessages } : s));
+        await supabase.from('sessions').update({ messages: updatedMessages }).eq('id', activeId);
       }
-      return prev.map((s) =>
-        s.id === activeId
-          ? { ...s, messages: [...s.messages, userMsg] }
-          : s
-      );
-    });
+    }
 
     setLoading(true);
 
     try {
-      const res  = await fetch("http://127.0.0.1:8000/debug", {
+      const res = await fetch(`${API_URL}/debug`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        // Send the input as BOTH code and query so the backend gets the natural language intent
-        body: JSON.stringify({ code: currentCode, query: currentCode }),
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}` 
+        },
+        body: JSON.stringify({ input: currentInput }),
       });
       const data = await res.json();
 
       const aiMsg = { type: "assistant", result: data, ts: new Date().toISOString() };
-      setSessions((prev) =>
-        prev.map((s) => {
-          if (s.id === targetId || s.id === activeId) {
-            return {
-              ...s,
-              messages: [...s.messages.filter((m) => m.type !== "assistant" || s.messages.indexOf(m) < s.messages.length), aiMsg],
-            };
-          }
-          return s;
-        })
-      );
+      const finalMessages = [...updatedMessages, aiMsg];
+      
+      setSessions((prev) => prev.map((s) => s.id === targetId ? { ...s, messages: finalMessages } : s));
+      await supabase.from('sessions').update({ messages: finalMessages }).eq('id', targetId);
+
     } catch {
       const errMsg = { type: "assistant", result: { error: "Could not connect to backend." }, ts: new Date().toISOString() };
-      setSessions((prev) =>
-        prev.map((s) =>
-          s.id === (targetId || activeId) ? { ...s, messages: [...s.messages, errMsg] } : s
-        )
-      );
+      const failedMessages = [...updatedMessages, errMsg];
+      
+      setSessions((prev) => prev.map((s) => s.id === targetId ? { ...s, messages: failedMessages } : s));
+      await supabase.from('sessions').update({ messages: failedMessages }).eq('id', targetId);
     }
 
     setLoading(false);
-  }, [code, loading, activeId]);
+  }, [input, loading, activeId, session, sessions]);
 
   /* Ctrl+Enter to submit */
   const handleKeyDown = (e) => {
@@ -302,7 +288,81 @@ export default function App() {
     ? sessions.filter((s) => s.title.toLowerCase().includes(search.toLowerCase()))
     : sessions;
   const recentSessions = filteredSessions.slice(0, 3);
-  const olderSessions  = filteredSessions.slice(3);
+  const olderSessions = filteredSessions.slice(3);
+
+  /* detect if text looks like code for display */
+  const looksLikeCode = (text) => {
+    const codeSignals = [/\bdef\s+\w+/, /\bclass\s+\w+/, /\bimport\s+/, /\bfunction\s+/, /\bconst\s+/, /\breturn\s+/, /[{};]\s*$/m];
+    const score = codeSignals.filter((r) => r.test(text)).length;
+    return score >= 1 && text.split("\n").length > 1;
+  };
+
+  /* Native Auth logic to avoid React 19 Auth-UI crashes */
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authUI, setAuthUI] = useState("login"); // 'login' or 'signup'
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    const { error } = await supabase.auth.signInWithPassword({ email: authEmail, password: authPassword });
+    if (error) alert(error.message);
+  };
+
+  const handleSignUp = async (e) => {
+    e.preventDefault();
+    const { error } = await supabase.auth.signUp({ email: authEmail, password: authPassword });
+    if (error) alert(error.message);
+    else alert("Success! Please check your email for a confirmation link.");
+  };
+
+  // If the user isn't logged in, strictly show our custom Login Screen
+  // We place this down here to respect React's Rules of Hooks
+  if (!session) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', backgroundColor: '#0f111a', color: '#fff' }}>
+        <div style={{ maxWidth: 400, width: '100%', padding: '2rem', backgroundColor: '#1a1d27', borderRadius: 12, border: '1px solid #2d313f' }}>
+          <h2 style={{ textAlign: 'center', marginBottom: '2rem' }}>{authUI === "login" ? "Sign In" : "Sign Up"}</h2>
+          
+          <form onSubmit={authUI === "login" ? handleLogin : handleSignUp} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+            <input 
+              type="email" placeholder="Email" required
+              value={authEmail} onChange={e => setAuthEmail(e.target.value)}
+              style={{ padding: "10px", borderRadius: "6px", border: "1px solid #3366FF", backgroundColor: "#0f111a", color: "white" }}
+            />
+            <input 
+              type="password" placeholder="Password" required minLength={6}
+              value={authPassword} onChange={e => setAuthPassword(e.target.value)}
+              style={{ padding: "10px", borderRadius: "6px", border: "1px solid #3366FF", backgroundColor: "#0f111a", color: "white" }}
+            />
+            <button type="submit" style={{ padding: "12px", borderRadius: "6px", backgroundColor: "#3366FF", color: "white", fontWeight: "bold", border: "none", cursor: "pointer", marginTop: "10px" }}>
+              {authUI === "login" ? "Log In" : "Create Account"}
+            </button>
+          </form>
+
+          <p style={{ textAlign: "center", marginTop: "1.5rem", fontSize: "0.9rem", color: "#8b949e", cursor: "pointer" }} 
+             onClick={() => setAuthUI(authUI === "login" ? "signup" : "login")}>
+            {authUI === "login" ? "Need an account? Sign Up" : "Already have an account? Sign In"}
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  /* Extract user details dynamically from the Supabase session */
+  let userName = "Developer";
+  let userInitials = "DEV";
+  
+  if (session?.user) {
+    // Try to grab their OAuth Google/GitHub name first
+    const metadataName = session.user.user_metadata?.full_name || session.user.user_metadata?.name;
+    // Otherwise fallback to their email prefix (e.g. prince@test.com -> prince)
+    userName = metadataName || (session.user.email ? session.user.email.split("@")[0] : "Developer");
+    userInitials = userName.substring(0, 2).toUpperCase();
+  }
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+  };
 
   return (
     <div className="app-shell">
@@ -313,23 +373,19 @@ export default function App() {
             <span className="btn-icon">✏️</span>
             New Debug Session
           </button>
-          <input
-            className="sidebar-search"
-            placeholder="🔍  Search sessions…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+          
+          <div className="search-box">
+            <span className="search-icon">🔍</span>
+            <input 
+              type="text" 
+              placeholder="Search sessions..." 
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
         </div>
 
-        <div className="sidebar-divider" />
-
         <div className="history-list">
-          {sessions.length === 0 && (
-            <div className="history-empty">
-              Your debug sessions will appear here.
-            </div>
-          )}
-
           {recentSessions.length > 0 && (
             <div className="sidebar-section">
               <div className="sidebar-section-label">Recent</div>
@@ -370,10 +426,10 @@ export default function App() {
         </div>
 
         <div className="sidebar-footer">
-          <div className="sidebar-user">
-            <div className="user-avatar">PK</div>
+          <div className="sidebar-user" onClick={handleSignOut} style={{ cursor: "pointer" }} title="Click to Sign Out">
+            <div className="user-avatar">{userInitials}</div>
             <div>
-              <div className="user-info-name">Prince Kushwaha</div>
+              <div className="user-info-name">{userName}</div>
               <div className="user-info-plan">⚡ Groq · LangGraph</div>
             </div>
           </div>
@@ -396,7 +452,7 @@ export default function App() {
             <div style={{ fontSize: 40 }}>🤖</div>
             <div className="empty-state-title">Ready when you are.</div>
             <div className="empty-state-sub">
-              Paste any buggy code below and let the multi-agent pipeline detect errors, fix them, and generate tests automatically.
+              Paste buggy code, ask a question, or both — the AI will figure out what you need.
             </div>
             <div className="empty-chips">
               {["Python SyntaxError", "Division by Zero", "NameError", "Indentation bug"].map((c) => (
@@ -413,22 +469,32 @@ export default function App() {
           <div className="chat-scroll">
             <div className="chat-messages">
               {activeSession.messages.map((msg, i) => {
-                if (msg.type === "user") return (
-                  <div key={i} className="message-row fade-in">
-                    <div className="message-header">
-                      <div className="message-avatar user">PK</div>
-                      <span className="message-role">You</span>
-                      <span className="message-time">{timeAgo(msg.ts)}</span>
-                    </div>
-                    <div className="user-code-bubble">
-                      <div className="user-code-bubble-header">
-                        <span>code.{langToExt(msg.lang || "")}</span>
-                        <CopyButton text={msg.code} />
+                if (msg.type === "user") {
+                  const isCode = looksLikeCode(msg.text || msg.code || "");
+                  const displayText = msg.text || msg.code || "";
+                  return (
+                    <div key={i} className="message-row fade-in">
+                      <div className="message-header">
+                        <div className="message-avatar user">PK</div>
+                        <span className="message-role">You</span>
+                        <span className="message-time">{timeAgo(msg.ts)}</span>
                       </div>
-                      <pre>{msg.code}</pre>
+                      {isCode ? (
+                        <div className="user-code-bubble">
+                          <div className="user-code-bubble-header">
+                            <span>code</span>
+                            <CopyButton text={displayText} />
+                          </div>
+                          <pre>{displayText}</pre>
+                        </div>
+                      ) : (
+                        <div className="user-query-bubble">
+                          💬 {displayText}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                );
+                  );
+                }
 
                 return (
                   <div key={i} className="message-row fade-in">
@@ -447,7 +513,6 @@ export default function App() {
                 );
               })}
 
-              {/* Loading indicator */}
               {loading && (
                 <div className="message-row fade-in">
                   <div className="message-header">
@@ -466,27 +531,26 @@ export default function App() {
           </div>
         )}
 
-        {/* ── Bottom Input Bar ── */}
+        {/* ── Bottom Input Bar (SINGLE field) ── */}
         <div className="input-bar-wrap">
           <div className="input-bar">
             <div className="input-bar-body">
               <textarea
                 ref={textareaRef}
                 className="input-textarea"
-                placeholder="Ask a question or paste your code here… (Ctrl+Enter to send)"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
+                placeholder="Paste code, ask a question, or both… (Ctrl+Enter to send)"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 rows={1}
                 spellCheck={false}
               />
             </div>
-            {/* ── send button stays on the right ── */}
             <div className="input-actions-row">
               <button
                 className="send-btn"
                 onClick={handleSubmit}
-                disabled={loading || !code.trim()}
+                disabled={loading || !input.trim()}
                 title="Debug (Ctrl+Enter)"
               >
                 {loading

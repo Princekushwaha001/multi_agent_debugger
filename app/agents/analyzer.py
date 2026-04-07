@@ -1,6 +1,6 @@
 from app.utils.llm import get_llm, safe_invoke
+from app.utils.parser import extract_json
 from langchain_core.messages import SystemMessage, HumanMessage
-import json
 
 llm = get_llm()
 
@@ -26,16 +26,15 @@ def analyzer(state):
 
     response = safe_invoke(llm, messages)
 
-    try:
-        data = json.loads(response.content)
-    except Exception:
+    data = extract_json(response.content)
+    if not data:
         data = {
             "language": "unknown",
             "description": response.content.strip()
         }
 
     return {
-        **state,  # code
+        **state,
         "language": data.get("language", "unknown"),
         "description": data.get("description", "")
     }

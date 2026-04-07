@@ -1,52 +1,130 @@
-from langgraph.graph import StateGraph
+from langgraph.graph import StateGraph, END
+from concurrent.futures import ThreadPoolExecutor
 
+# agents
+from app.agents.orchestrator import orchestrator
 from app.agents.analyzer import analyzer
 from app.agents.error_detector import error_detector
-from app.agents.retriever import retriever
 from app.agents.fix_generator import fix_generator
 from app.agents.doc_generator import doc_generator
-from app.agents.test_generator import test_generator
 from app.agents.validator import validator
 
+# -------------------------------
+# 🔁 STEP CONTROL
+# -------------------------------
+
+def increment_step(state):
+    return {
+        **state,
+        "current_step": state.get("current_step", 0) + 1
+    }
+
+# -------------------------------
+# 🔀 ROUTER (dynamic flow)
+# -------------------------------
+
+def route_next(state):
+    flow = state.get("flow", [])
+    step = state.get("current_step", 0)
+
+    # fallback safety
+    if not flow:
+        flow = [
+            "analyzer",
+            "error_detector",
+            "fix_generator",
+            "validator",
+            "doc_generator"
+        ]
+        state["flow"] = flow
+
+    if step >= len(flow):
+        return "end"
+
+    return flow[step]
+
+# -------------------------------
+# 🔁 RETRY LOGIC (validator)
+# -------------------------------
 
 def should_retry(state):
     retries = state.get("retries", 0)
 
-    if retries >= 2:   # max 2 retries
-        return False
+    if retries >= 2:
+        return "end"
 
-    return not state.get("success", False)
+    return "retry" if not state.get("success", False) else "next"
+
+# -------------------------------
+# 🧠 BUILD GRAPH
+# -------------------------------
 
 def build_graph():
 
     graph = StateGraph(dict)
 
-    graph.add_node("analyze", analyzer)
-    graph.add_node("detect", error_detector)
-    graph.add_node("retrieve", retriever)
-    graph.add_node("fix", fix_generator)
-    graph.add_node("doc", doc_generator)
-    graph.add_node("test", test_generator)
-    graph.add_node("validate", validator)
+    # Nodes
+    graph.add_node("orchestrator", orchestrator)
+    graph.add_node("analyzer", analyzer)
+    graph.add_node("error_detector", error_detector)
+    graph.add_node("fix_generator", fix_generator)
+    graph.add_node("validator", validator)
+    graph.add_node("doc_generator", doc_generator)
+    graph.add_node("increment", increment_step)
 
-    # 🔥 set entry point
-    graph.set_entry_point("analyze")
+    # Entry
+    graph.set_entry_point("orchestrator")
 
-    graph.add_edge("analyze", "detect")
-    graph.add_edge("detect", "retrieve")
-    graph.add_edge("retrieve", "fix")
-    graph.add_edge("fix", "doc")
-    graph.add_edge("doc", "test")
-    graph.add_edge("test", "validate")
-
-
-    # 🔥 retry loop
+    # -------------------------------
+    # 🔀 FIRST ROUTE
+    # -------------------------------
     graph.add_conditional_edges(
-        "validate",
+        "orchestrator",
+        route_next,
+        {
+            "analyzer": "analyzer",
+            "error_detector": "error_detector",
+            "fix_generator": "fix_generator",
+            "validator": "validator",
+            "doc_generator": "doc_generator",
+            "end": END
+        }
+    )
+
+    # -------------------------------
+    # 🔁 AFTER EACH AGENT
+    # -------------------------------
+    graph.add_edge("analyzer", "increment")
+    graph.add_edge("error_detector", "increment")
+    graph.add_edge("fix_generator", "increment")
+    graph.add_edge("doc_generator", "increment")
+
+    # -------------------------------
+    # 🔁 VALIDATOR (retry logic)
+    # -------------------------------
+    graph.add_conditional_edges(
+        "validator",
         should_retry,
         {
-            True: "fix",     # retry fix
-            False: "__end__"
+            "retry": "fix_generator",
+            "next": "increment",
+            "end": END
+        }
+    )
+
+    # -------------------------------
+    # 🔁 LOOP BACK
+    # -------------------------------
+    graph.add_conditional_edges(
+        "increment",
+        route_next,
+        {
+            "analyzer": "analyzer",
+            "error_detector": "error_detector",
+            "fix_generator": "fix_generator",
+            "validator": "validator",
+            "doc_generator": "doc_generator",
+            "end": END
         }
     )
 

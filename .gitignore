@@ -1,66 +1,28 @@
-# ─── Python ───────────────────────────────────────────────────────────────────
+# Virtual Environment
+venv/
+ENV/
+env/
+.env
+
+# Python Cache
 __pycache__/
 *.py[cod]
 *$py.class
-*.pyo
-*.pyd
-.Python
-*.egg
-*.egg-info/
-dist/
+.pytest_cache/
+
+# React / Node
+node_modules/
+frontend/node_modules/
 build/
-eggs/
-parts/
-var/
-sdist/
-develop-eggs/
-.installed.cfg
-lib/
-lib64/
+.eslintcache
 
-# ─── Virtual Environment ──────────────────────────────────────────────────────
-venv/
-env/
-ENV/
-.venv/
-.env/
+# Local Persistent Cache & Sandbox
+_tmp/
 
-# ─── Environment Variables / Secrets ─────────────────────────────────────────
-.env
-.env.*
-!.env.example
-
-# ─── Application Data / Runtime State ────────────────────────────────────────
-memory.json
-data/
-
-# ─── IDEs and Editors ─────────────────────────────────────────────────────────
+# IDEs
 .vscode/
 .idea/
-*.suo
-*.user
-*.swp
-*.swo
-*~
 
-# ─── OS Files ─────────────────────────────────────────────────────────────────
+# OS Files
 .DS_Store
 Thumbs.db
-desktop.ini
-
-# ─── Logs ─────────────────────────────────────────────────────────────────────
-*.log
-logs/
-
-# ─── Frontend (Node / React) ──────────────────────────────────────────────────
-frontend/node_modules/
-frontend/.cache/
-frontend/build/
-frontend/.env
-frontend/.env.*
-!frontend/.env.example
-
-# ─── Testing ──────────────────────────────────────────────────────────────────
-.pytest_cache/
-.coverage
-htmlcov/

@@ -1,7 +1,6 @@
 from app.utils.llm import get_llm, safe_invoke
+from app.utils.parser import extract_json, extract_list_from_prose
 from langchain_core.messages import SystemMessage, HumanMessage
-import json
-import re
 
 llm = get_llm()
 
@@ -24,34 +23,13 @@ def error_detector(state):
 
     response = safe_invoke(llm, messages)
 
-    # Try direct JSON parse
-    try:
-        data = json.loads(response.content)
-        errors = data.get("errors", [])
-        return {**state, "errors": errors}
-    except Exception:
-        pass
+    # Try JSON extraction (handles direct parse + regex fallback)
+    data = extract_json(response.content)
+    if data and "errors" in data:
+        return {**state, "errors": data["errors"]}
 
-    # Fallback: extract JSON block from response using regex
-    match = re.search(r'\{.*?\}', response.content, re.DOTALL)
-    if match:
-        try:
-            data = json.loads(match.group())
-            errors = data.get("errors", [])
-            if errors:
-                return {**state, "errors": errors}
-        except Exception:
-            pass
-
-    # Last resort: pull numbered/bulleted items from prose
-    lines = response.content.split("\n")
-    errors = []
-    for line in lines:
-        line = line.strip()
-        # Match "1. Error text" or "- Error text" or "* Error text"
-        m = re.match(r'^[\d]+[\.\)]\s+\*{0,2}(.+?)\*{0,2}:?\s*$', line)
-        if m:
-            errors.append(m.group(1).strip())
+    # Last resort: extract numbered/bulleted items from prose
+    errors = extract_list_from_prose(response.content)
     if errors:
         return {**state, "errors": errors}
 
